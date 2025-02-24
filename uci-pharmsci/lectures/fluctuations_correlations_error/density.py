@@ -5,7 +5,7 @@
 # Author: Dr Gaetano Calabro'
 # University of California, Irvine
 # ver 0.0 06/23/2016
-# Adapted Nov. 2017 and Feb. 2022 by David Mobley
+# Adapted Nov. 2017, Feb. 2022, Feb. 2025 by David Mobley
 #--------------------------------------
 
 
@@ -41,8 +41,8 @@ RESULT_PATH = "density_simulation/"
 md_platform = 'OpenCL'
 
 # Some file names
-prmtop_filename = DATA_PATH + identifier + '.prmtop'
-inpcrd_filename = DATA_PATH + identifier + '.inpcrd'
+top_filename = DATA_PATH + identifier + '.top'
+gro_filename = DATA_PATH + identifier + '.gro'
 xml_filename = RESULT_PATH + identifier + '.xml' # For serialized system
 
 #--------------MINIMIZATION----------------
@@ -110,9 +110,10 @@ npt_data_filename = RESULT_PATH + "npt/" + identifier + "_npt.csv"
 prod_data_filename = RESULT_PATH + "prod/" + identifier + "_prod.csv"
 prod_dcd_filename = RESULT_PATH + "prod/" + identifier + "_prod.dcd"
 
-# Load prmtop, crd
-prmtop = AmberPrmtopFile( prmtop_filename )
-inpcrd = AmberInpcrdFile( inpcrd_filename )
+# Load top, gro
+gro = GromacsGroFile( gro_filename )
+top = GromacsTopFile( top_filename, periodicBoxVectors=gro.getPeriodicBoxVectors() )
+
 
 def make_path(filename):
     try:
@@ -122,7 +123,7 @@ def make_path(filename):
         pass
 
 # Create System and store to OpenMM XML for easier reuse later
-system = prmtop.createSystem(nonbondedMethod = PME, nonbondedCutoff = 1*nanometer, constraints = HBonds)
+system = top.createSystem(nonbondedMethod = PME, nonbondedCutoff = 1*nanometer, constraints = HBonds)
 make_path(xml_filename)
 serialized_system = XmlSerializer.serialize(system)
 file = open(xml_filename, 'w')
@@ -142,10 +143,10 @@ def minimization():
     integrator = mm.LangevinIntegrator(TEMPERATURE, MIN_FRICTION, MIN_TIME_STEP)
 
     # Set Simulation
-    simulation = app.Simulation(prmtop.topology, system, integrator, MIN_PLATFORM)
+    simulation = app.Simulation(top.topology, system, integrator, MIN_PLATFORM)
 
     # Set Position
-    simulation.context.setPositions(inpcrd.positions)
+    simulation.context.setPositions(gro.positions)
 
     state = simulation.context.getState(getEnergy=True)
 
@@ -154,7 +155,9 @@ def minimization():
 
     # Minimization
     print('Minimizing...\n')
-    simulation.minimizeEnergy(tolerance=MIN_TOLERANCE, maxIterations=MIN_STEPS)
+    # Units for tolerance have changed, commenting this out
+    #simulation.minimizeEnergy(tolerance=MIN_TOLERANCE, maxIterations=MIN_STEPS)
+    simulation.minimizeEnergy( maxIterations=MIN_STEPS)
 
     state = simulation.context.getState(getPositions=True, getEnergy=True)
 
@@ -176,7 +179,7 @@ def nvt(coords):
     integrator = mm.LangevinIntegrator(TEMPERATURE, NVT_FRICTION, NVT_TIME_STEP)
 
     # Set Simulation
-    simulation = app.Simulation(prmtop.topology, system, integrator, NVT_PLATFORM, NVT_PROPERTIES)
+    simulation = app.Simulation(top.topology, system, integrator, NVT_PLATFORM, NVT_PROPERTIES)
 
 
     # Set Position and velocities
@@ -221,7 +224,7 @@ def npt(coords, velocities):
     system.addForce(mm.MonteCarloBarostat(PRESSURE, TEMPERATURE, BAROSTAT_FREQUENCY))
 
     # Set Simulation
-    simulation = app.Simulation(prmtop.topology, system, integrator, NPT_PLATFORM, NPT_PROPERTIES)
+    simulation = app.Simulation(top.topology, system, integrator, NPT_PLATFORM, NPT_PROPERTIES)
 
     # Set Position and velocities
     simulation.context.setPositions(coords)
@@ -267,7 +270,7 @@ def production(coords, velocities, box):
     system.addForce(mm.MonteCarloBarostat(PRESSURE, TEMPERATURE, BAROSTAT_FREQUENCY))
 
     # Set Simulation
-    simulation = app.Simulation(prmtop.topology, system, integrator, PROD_PLATFORM, PROD_PROPERTIES)
+    simulation = app.Simulation(top.topology, system, integrator, PROD_PLATFORM, PROD_PROPERTIES)
 
     # Set Position and velocities
     simulation.context.setPositions(coords)
@@ -301,7 +304,7 @@ def production(coords, velocities, box):
 
         d = pd.read_csv(prod_data_filename, names=["step", "U", "Temperature", "Density"], skiprows=1)
         density_ts = np.array(d.Density)
-        [t0, g, Neff] = ts.detectEquilibration(density_ts, nskip=1000)
+        [t0, g, Neff] = ts.detect_equilibration(density_ts, nskip=1000)
         density_ts = density_ts[t0:]
         density_mean_stderr = density_ts.std() / np.sqrt(Neff)
 
@@ -339,7 +342,7 @@ if __name__=='__main__':
     else:
         import mdtraj as md
         # Load dcd file with relevant INFO
-        traj = md.load_dcd( npt_dcd_filename, prmtop_filename )
+        traj = md.load_dcd( npt_dcd_filename, top_filename )
         coords = traj.xyz[-1]
         #velocities = traj.velocities[-1]
         box = traj.unitcell_vectors[-1]
